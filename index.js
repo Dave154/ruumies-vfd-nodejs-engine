@@ -2,13 +2,20 @@ import 'dotenv/config';
 import cron from 'node-cron';
 import fetch from 'node-fetch';
 import { createHash } from 'crypto';
-import { initializeApp, applicationDefault, cert } from 'firebase-admin/app';
+import { initializeApp, cert } from 'firebase-admin/app';
+
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import express from 'express';
 
+import fs from 'fs';
+
+const serviceAccount = JSON.parse(
+  fs.readFileSync('./firebase-service-account.json', 'utf8')
+);
+
 // Initialize Firebase Admin
 initializeApp({
-  credential: applicationDefault(), // Or cert(serviceAccount) if using service account JSON
+  credential: cert(serviceAccount), // Or cert(serviceAccount) if using service account JSON
 });
 
 const db = getFirestore();
