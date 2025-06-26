@@ -15,7 +15,7 @@ const serviceAccount = JSON.parse(
 
 // Initialize Firebase Admin
 initializeApp({
-  credential: cert(serviceAccount), // Or cert(serviceAccount) if using service account JSON
+  credential: cert(serviceAccount), 
 });
 
 const db = getFirestore();
@@ -147,10 +147,10 @@ const initiateTransfer = async (token, accountNo, amount) => {
 };
 
 // Scheduled job
-cron.schedule('* * * * *', async () => {
+cron.schedule('0 0 * * *', async () => {
   console.log('Running scheduled disbursement check...');
   const now = Date.now();
-  const cutoff = now - 7 * 24 * 60 * 60 * 1000;
+  // const cutoff = now - 7 * 24 * 60 * 60 * 1000;
 
   try {
     const snapshot = await db.collection('paymentEntries').where('released', '==', false).get();
