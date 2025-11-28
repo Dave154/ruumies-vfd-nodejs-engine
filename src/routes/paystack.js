@@ -1,14 +1,30 @@
 // src/routes/paystack.js
 import express from "express";
 import crypto from "crypto";
-import { initializeTransaction, verifyTransaction } from "../services/paystackService.js";
+import { initializeTransaction, resolveAccount, verifyTransaction } from "../services/paystackService.js";
 
 const router = express.Router();
+
+router.get("/banks", async (req, res) => {
+  try {
+    const response = await fetch("https://api.paystack.co/bank", {
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`
+      }
+    });
+
+    const data = await response.json();
+    res.json(data.data);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch banks" });
+  }
+});
 
 // POST /api/payments/initialize
 router.post("/initialize", async (req, res) => {
   try {
     const { email, amount, metadata } = req.body;
+    console.log("metas",metadata)
     if (!email || !amount) return res.status(400).json({ status: false, message: "email and amount required" });
 
     const data = await initializeTransaction({ email, amount, metadata });
@@ -38,38 +54,25 @@ router.post("/verify", async (req, res) => {
   }
 });
 
-// webhook handler function exported for mounting with express.raw
-export async function webhookHandler(req, res) {
+router.post("/resolve-account", async (req, res) => {
   try {
-    const WEBHOOK_SECRET = process.env.PAYSTACK_WEBHOOK_SECRET;
-    const signature = req.headers["x-paystack-signature"];
-
-    if (!signature || !WEBHOOK_SECRET) {
-      console.warn("missing signature or webhook secret");
-      return res.status(400).send("bad request");
-    }
-    const payload = req.body
-    const event = payload.event;
-    const data = payload.data;
-
-    // handle relevant events
-    if (event === "charge.success" || event === "transaction.success") {
-      const reference = data.reference;
-      const status = data.status;
-      const amount = data.amount;
-      const metadata = data.metadata || {};
-      // TODO: reconcile with DB using metadata or reference
-      console.log("paystack webhook success", { reference, status, amount, metadata });
-      // mark order paid if amounts match etc
-      return res.status(200).send("ok");
+    const { account_number, bank_code } = req.body || {};
+    if (!account_number || !bank_code) {
+      return res.status(400).json({ status: false, message: "account_number and bank_code are required" });
     }
 
-    console.log("unhandled event", event);
-    return res.status(200).send("ok");
+    // call Paystack via service
+    const { account_name, raw } = await resolveAccount({ account_number, bank_code });
+
+    return res.json({ status: true, data: { account_name, raw } });
   } catch (err) {
-    console.error("webhook handler error", err);
-    return res.status(500).send("server error");
+    console.error("resolve-account error", err?.message || err, err?.response || "");
+    // If Paystack returns helpful message, use it
+    const message = err?.response?.message || err?.message || "Failed to resolve account";
+    return res.status(502).json({ status: false, message });
   }
-}
+});
+
+
 
 export default router;

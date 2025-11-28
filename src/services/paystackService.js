@@ -27,3 +27,28 @@ export async function verifyTransaction(reference) {
   if (!resp.data) throw new Error("verify failed");
   return resp.data.data;
 }
+
+export async function resolveAccount({ account_number, bank_code }) {
+  if (!account_number || !bank_code) {
+    throw new Error("account_number and bank_code are required");
+  }
+
+  const url = `${API_BASE}/bank/resolve?account_number=${encodeURIComponent(account_number)}&bank_code=${encodeURIComponent(bank_code)}`;
+
+  const resp = await axios.get(url, {
+    headers: {
+      Authorization: `Bearer ${PAYSTACK_SECRET}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!resp.data || !resp.data.status) {
+    const msg = resp.data?.message || "Paystack resolve failed";
+    const err = new Error(msg);
+    err.response = resp.data;
+    throw err;
+  }
+
+  const accountName = resp.data.data?.account_name || "";
+  return { account_name: accountName, raw: resp.data };
+}
