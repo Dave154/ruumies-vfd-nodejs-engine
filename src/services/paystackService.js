@@ -1,8 +1,9 @@
 // src/services/paystackService.js
 import axios from "axios";
+import dotenv from "dotenv";
 
-const PAYSTACK_SECRET = "sk_test_4f9d3626833831e3275caee340bec37af77b1f1c"
-// process.env.PAYSTACK_SECRET;
+dotenv.config();
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET
 console.log(PAYSTACK_SECRET)
 const API_BASE = "https://api.paystack.co";
 
@@ -51,4 +52,102 @@ export async function resolveAccount({ account_number, bank_code }) {
 
   const accountName = resp.data.data?.account_name || "";
   return { account_name: accountName, raw: resp.data };
+}
+export async function createSubaccountOnPaystack({
+  business_name,
+  bank_code,
+  account_number,
+  account_name,
+  percentage_charge = 0,
+  metadata = {},
+}) {
+  if (!business_name || !bank_code || !account_number) {
+    throw new Error("business_name, bank_code and account_number are required");
+  }
+
+  // Build payload. If Paystack expects settlement_bank instead of bank_code adjust here.
+  const payload = {
+    business_name,
+    settlement_bank: bank_code, // commonly accepted param
+    account_number,
+    percentage_charge: Number(percentage_charge) || 0,
+    metadata,
+  };
+
+  // Include account_name if provided - Paystack may or may not use this field
+  if (account_name) payload.business_name = account_name;
+
+  const url = `${API_BASE}/subaccount`;
+
+  const resp = await axios.post(url, payload, {
+    headers: {
+      Authorization: `Bearer ${PAYSTACK_SECRET}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!resp.data || !resp.data.status) {
+    const msg = resp.data?.message || "Failed to create subaccount on Paystack";
+    const err = new Error(msg);
+    err.response = resp.data;
+    throw err;
+  }
+
+  // resp.data.data is the subaccount object
+  return resp.data.data;
+}
+
+export async function createTransferRecipient({ name, account_number, bank_code, metadata = {} }) {
+  if (!name || !account_number || !bank_code) throw new Error("name account_number bank_code required");
+  const payload = {
+    type: "nuban",
+    name,
+    account_number: String(account_number),
+    bank_code,
+    currency: "NGN",
+    metadata,
+  };
+  const res = await axios.post(`${API_BASE}/transferrecipient`, payload, {
+    headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" },
+  });
+  if (!res.data || !res.data.status) {
+    const err = new Error(res.data?.message || "Failed to create transfer recipient");
+    err.response = res.data;
+    throw err;
+  }
+  return res.data.data; // recipient_code, details
+}
+
+export async function initiateTransfer({ amountKobo, recipient_code, reason = "", reference = null, metadata = {} }) {
+  if (!amountKobo || !recipient_code) throw new Error("amountKobo and recipient_code required");
+  const payload = {
+    source: "balance",
+    amount: Number(amountKobo),
+    recipient: recipient_code,
+    reason,
+    metadata,
+  };
+  if (reference) payload.reference = reference;
+  const res = await axios.post(`${API_BASE}/transfer`, payload, {
+    headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" },
+  });
+  if (!res.data || !res.data.status) {
+    const err = new Error(res.data?.message || "Failed to initiate transfer");
+    err.response = res.data;
+    throw err;
+  }
+  return res.data.data;
+}
+
+export async function verifyTransfer(paystackTransferIdOrCode) {
+  if (!paystackTransferIdOrCode) throw new Error("id required");
+  const res = await axios.get(`${API_BASE}/transfer/${encodeURIComponent(paystackTransferIdOrCode)}`, {
+    headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` },
+  });
+  if (!res.data || !res.data.status) {
+    const err = new Error(res.data?.message || "Failed to verify transfer");
+    err.response = res.data;
+    throw err;
+  }
+  return res.data.data;
 }
