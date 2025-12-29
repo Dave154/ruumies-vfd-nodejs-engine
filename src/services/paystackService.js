@@ -126,17 +126,19 @@ export async function initiateTransfer({ amountKobo, recipient_code, reason = ""
     recipient: recipient_code,
     reason,
     metadata,
-  };
+  }; 
   if (reference) payload.reference = reference;
   const res = await axios.post(`${API_BASE}/transfer`, payload, {
     headers: { Authorization: `Bearer ${PAYSTACK_SECRET}`, "Content-Type": "application/json" },
   });
+
   if (!res.data || !res.data.status) {
     const err = new Error(res.data?.message || "Failed to initiate transfer");
     err.response = res.data;
     throw err;
   }
-  return res.data.data;
+  console.log("initiateTransfer response:", res.data);
+  return res.data;
 }
 
 export async function verifyTransfer(paystackTransferIdOrCode) {

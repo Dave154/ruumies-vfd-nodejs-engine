@@ -2,7 +2,7 @@
 import express from "express";
 import crypto from "crypto";
 import { createSubaccountOnPaystack, initializeTransaction, initiateTransfer, resolveAccount, verifyTransaction } from "../services/paystackService.js";
-import { db } from "../../firebase.js";
+import { admin, db } from "../../firebase.js";
 import { ensureRecipient, findSubaccount } from "./payments.js";
 
 const router = express.Router();
@@ -157,6 +157,7 @@ router.post("/subaccount", async (req, res) => {
 router.post("/payout", async (req, res) => {
   try {
     const { userId, amount, clientRef, reason = "", metadata = {} } = req.body;
+    console.log(amount)
 
     if (!userId || !amount) {
       return res.status(400).json({
@@ -205,6 +206,7 @@ router.post("/payout", async (req, res) => {
     // Ensure recipient exists
     const recipient = await ensureRecipient(subId, subData);
     const recipient_code = recipient.recipient_code;
+    console.log(recipient_code,"recipientCode")
 
     // Initiate transfer
     const transfer = await initiateTransfer({
@@ -214,7 +216,6 @@ router.post("/payout", async (req, res) => {
       reference: clientRef || undefined,
       metadata: { userId, ...metadata }
     });
-
     const record = {
       clientRef: clientRef || null,
       transfer_code: transfer.transfer_code || null,
@@ -232,7 +233,8 @@ router.post("/payout", async (req, res) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
-
+    
+    console.log(record,"record", transfer)
     const saveId = transfer.transfer_code || transfer.id;
 
     if (saveId) {
@@ -254,11 +256,19 @@ router.post("/payout", async (req, res) => {
     });
 
   } catch (error) {
+    if (error.response && error.response.data) {
     console.error("payout error", error.response.data);
-    return res.status(500).json({
+    return res.status(400).json({
       status: false,
-      message: error.response.data.message || "Failed to process payout"
+      message: error.response.data.message || "Paystack error"
     });
+  }
+
+  console.error("payout error", error);
+  return res.status(500).json({
+    status: false,
+    message: "Internal payout error"
+  });
   }
 });
 
