@@ -122,10 +122,7 @@ async function incrementPendingAmount(userId, amountNumber) {
 }
 
 export default async function webhookHandler(req, res) {
-<<<<<<< HEAD
   console.log("webhookHandler called");
-=======
->>>>>>> 8b981f200a76b3e4ee23001dc73ceb10e98e677f
   try {
     const WEBHOOK_SECRET = process.env.PAYSTACK_WEBHOOK_SECRET;
     const signature = req.headers["x-paystack-signature"];
