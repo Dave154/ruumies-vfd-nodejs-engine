@@ -4,6 +4,10 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET
+<<<<<<< HEAD
+=======
+console.log(PAYSTACK_SECRET)
+>>>>>>> 8b981f200a76b3e4ee23001dc73ceb10e98e677f
 const API_BASE = "https://api.paystack.co";
 
 if (!PAYSTACK_SECRET) throw new Error("PAYSTACK_SECRET not set");

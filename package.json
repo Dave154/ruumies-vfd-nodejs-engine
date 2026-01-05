@@ -1,13 +1,30 @@
 {
   "name": "ruumies-disbursement-backend",
   "version": "1.0.0",
+<<<<<<< HEAD
   "private": true,
+=======
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+>>>>>>> 8b981f200a76b3e4ee23001dc73ceb10e98e677f
   "type": "module",
   "scripts": {
     "dev": "nodemon server.js"
   },
   "dependencies": {
     "axios": "^1.13.2",
+<<<<<<< HEAD
+=======
+    "body-parser": "^2.2.0",
+>>>>>>> 8b981f200a76b3e4ee23001dc73ceb10e98e677f
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
