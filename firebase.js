@@ -2,7 +2,7 @@ import admin from "firebase-admin";
 
 if (!admin.apps.length) {
   const serviceAccount = JSON.parse(
-    process.env.FIREBASE_SERVICE_ACCOUNT
+    process.env.FIREBASE_SERVICE_ACCOUNT.replace(/\\n/g, "\n")
   );
 
   admin.initializeApp({
@@ -11,5 +11,4 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
-
 export { admin, db };
