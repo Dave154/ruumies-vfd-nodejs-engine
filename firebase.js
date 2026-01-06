@@ -1,36 +1,37 @@
 import admin from "firebase-admin";
 import dotenv from "dotenv";
-import fs from "fs"; // Import file system for local check
 
 dotenv.config();
 
 if (!admin.apps.length) {
-  let serviceAccount;
-
-  // OPTION A: We are on Vercel (Base64 Variable exists)
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    try {
-      const buffer = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64');
-      serviceAccount = JSON.parse(buffer.toString('utf8'));
-    } catch (e) {
-      console.error("Vercel Base64 parse failed:", e);
-      throw new Error("Failed to parse Service Account from Base64");
+  try {
+    // Get the encoded string from your environment variable
+    const encodedString = process.env.FIREBASE_SERVICE_ACCOUNT;
+    
+    if (!encodedString) {
+      throw new Error("FIREBASE_SERVICE_ACCOUNT is missing from environment variables");
     }
-  } 
-  // OPTION B: We are Local (File exists)
-  else if (fs.existsSync('./firebase-service-account.json')) {
-    const fileContent = fs.readFileSync('./firebase-service-account.json', 'utf8');
-    serviceAccount = JSON.parse(fileContent);
-  } 
-  // ERROR: Neither method worked
-  else {
-    throw new Error("Fatal: Could not find firebase-service-account.json OR Base64 env var.");
-  }
 
-  // Initialize Firebase
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
+    // Decode it from Base64 back to normal text
+    const buffer = Buffer.from(encodedString, 'base64');
+    const decodedJson = buffer.toString('utf8');
+
+    // Parse the normal text into a JSON object
+    const serviceAccount = JSON.parse(decodedJson);
+
+    // Initialize Firebase
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    
+
+  } catch (error) {
+    console.error("❌ Firebase Auth Error:", error.message);
+    if (error.message.includes("Unexpected token")) {
+       console.error("Hint: The variable might not be a valid Base64 string.");
+    }
+    throw error;
+  }
 }
 
 const db = admin.firestore();
