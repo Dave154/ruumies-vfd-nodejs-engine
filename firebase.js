@@ -8,7 +8,7 @@ if (!admin.apps.length) {
   let serviceAccount;
 
   // OPTION A: We are on Vercel (Base64 Variable exists)
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     try {
       const buffer = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64');
       serviceAccount = JSON.parse(buffer.toString('utf8'));
