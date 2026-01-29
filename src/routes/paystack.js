@@ -89,55 +89,59 @@ router.post("/subaccount", async (req, res) => {
     if (!business_name || !bank_code || !account_number) {
       return res.status(400).json({ status: false, message: "business_name, bank_code and account_number are required" });
     }
-    // Idempotency: check if we already have a subaccount saved for this userId or account_number
-    // Priority: userId -> account_number
-    let existing = null;
-    if (userId) {
-      const doc = await db.collection("subaccounts").doc(userId).get();
-      if (doc.exists) existing = doc.data();
+
+    // Check if this bank account is already registered globally
+    let globalMatch = null;
+    const q = await db.collection("subaccounts")
+      .where("account_number", "==", String(account_number))
+      .where("bank_code", "==", String(bank_code))
+      .limit(1)
+      .get();
+
+    if (!q.empty) {
+      globalMatch = q.docs[0].data();
     }
 
-    if (!existing) {
-      // try by account_number index
-      const q = await db.collection("subaccounts").where("account_number", "==", String(account_number)).limit(1).get();
-      if (!q.empty) existing = q.docs[0].data();
+    let subaccountData;
+    let paystackSubaccountId;
+
+    if (globalMatch && globalMatch.paystack_subaccount_id) {
+      // Reuse existing subaccount details
+      paystackSubaccountId = globalMatch.paystack_subaccount_id;
+      subaccountData = globalMatch.subaccount;
+    } else {
+      // Create new subaccount on Paystack
+      const paystackPayload = {
+        business_name,
+        bank_code,
+        account_number,
+        account_name,
+        percentage_charge,
+        metadata,
+      };
+      subaccountData = await createSubaccountOnPaystack(paystackPayload);
+      paystackSubaccountId = subaccountData.subaccount_code;
     }
 
-    if (existing && existing.paystack_subaccount_id) {
-      // return existing record to the client - idempotent
-      return res.json({ status: true, data: existing, idempotent: true });
-    }
-
-    // Create subaccount on Paystack
-    const paystackPayload = {
-      business_name,
-      bank_code,
-      account_number,
-      account_name,
-      percentage_charge,
-      metadata,
-    };
-
-    const subaccount = await createSubaccountOnPaystack(paystackPayload);
-
-    // Save to Firestore. If we have userId use doc id = userId for easy lookup
+    // Prepare data to save/update for this specific user
     const stored = {
       userId: userId || null,
-      paystack_subaccount_id: subaccount.subaccount_code,
-      subaccount: subaccount,
+      paystack_subaccount_id: paystackSubaccountId,
+      subaccount: subaccountData,
       business_name,
       account_number: String(account_number),
-      bank_code,
-      account_name: account_name || subaccount?.account_name || "",
+      bank_code: String(bank_code),
+      account_name: account_name || subaccountData?.account_name || "",
       percentage_charge: Number(percentage_charge) || 0,
-      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
+
+    if (!stored.createdAt) stored.createdAt = new Date().toISOString();
 
     if (userId) {
       await db.collection("subaccounts").doc(userId).set(stored, { merge: true });
     } else {
-      // write with paystack_subaccount_id as id if available, otherwise push auto id
-      const docId = stored.paystack_subaccount_id || undefined;
+      const docId = stored.paystack_subaccount_id;
       if (docId) {
         await db.collection("subaccounts").doc(docId).set(stored, { merge: true });
       } else {
@@ -146,6 +150,7 @@ router.post("/subaccount", async (req, res) => {
     }
 
     return res.json({ status: true, data: stored });
+
   } catch (err) {
     console.error("create subaccount error", err?.message || err, err?.response || "");
     const message = err?.response?.message || err?.message || "Failed to create subaccount";
