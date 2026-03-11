@@ -1,10 +1,9 @@
-// src/routes/paystack.js
 import express from "express";
 import crypto from "crypto";
-import { createSubaccountOnPaystack, initializeTransaction, initiateTransfer, resolveAccount, verifyTransaction } from "../services/paystackService.js";
+import { createSubaccountOnPaystack, createTransferRecipient, initializeTransaction, initiateTransfer, resolveAccount, verifyTransaction } from "../services/paystackService.js";
 import { admin, db } from "../../firebase.js";
 import { ensureRecipient, findSubaccount } from "./payments.js";
-
+import { verifyAdmin, verifySuperAdmin } from "../middleware/authMiddleware.js";
 const router = express.Router();
 
 router.get("/banks", async (req, res) => {
@@ -159,125 +158,104 @@ router.post("/subaccount", async (req, res) => {
 });
 
 // POST /api/payments/payout
-router.post("/payout", async (req, res) => {
+router.post("/payout", verifyAdmin, async (req, res) => {
+  const { withdrawalId } = req.body;
+
+  if (!withdrawalId) {
+    return res.status(400).json({ status: false, message: "withdrawalId is required" });
+  }
+
+  const withdrawalRef = db.collection("withdrawals").doc(withdrawalId);
+  let withdrawalData;
+
   try {
-    const { userId, amount, clientRef, reason = "", metadata = {} } = req.body;
-    console.log(amount)
+    withdrawalData = await db.runTransaction(async (transaction) => {
+      const withdrawalSnap = await transaction.get(withdrawalRef);
 
-    if (!userId || !amount) {
-      return res.status(400).json({
-        status: false,
-        message: "userId and amount are required"
-      });
+      if (!withdrawalSnap.exists) {
+        throw new Error("NOT_FOUND");
+      }
+
+      const data = withdrawalSnap.data();
+
+      if (data.status !== "pending") {
+        throw new Error(`ALREADY_PROCESSED_${data.status}`);
+      }
+
+      transaction.update(withdrawalRef, { status: "processing_init" });
+      
+      return data;
+    });
+  } catch (error) {
+    if (error.message === "NOT_FOUND") {
+      return res.status(404).json({ status: false, message: "Withdrawal request not found" });
     }
+    if (error.message.startsWith("ALREADY_PROCESSED")) {
+      return res.status(400).json({ status: false, message: "This withdrawal is already being processed or completed." });
+    }
+    return res.status(500).json({ status: false, message: "Database transaction failed." });
+  }
 
+  try {
+    const { amount, bank: bankDetails, userId } = withdrawalData;
     const amountKobo = Math.round(Number(amount) * 100);
 
     if (isNaN(amountKobo) || amountKobo <= 0) {
-      return res.status(400).json({
-        status: false,
-        message: "Invalid amount"
-      });
+      throw new Error("INVALID_AMOUNT");
     }
 
-    // Idempotency check
-    if (clientRef) {
-      const q = await db.collection("transfers")
-        .where("clientRef", "==", clientRef)
-        .limit(1)
-        .get();
+    const recipient = await createTransferRecipient({
+      name: bankDetails.account_name || "Ruumies User",
+      account_number: bankDetails.account_number,
+      bank_code: bankDetails.bank_code,
+      metadata: { userId, withdrawalId }
+    });
 
-      if (!q.empty) {
-        return res.json({
-          status: true,
-          data: q.docs[0].data(),
-          idempotent: true
-        });
-      }
-    }
-
-    // Fetch user's subaccount
-    const sub = await findSubaccount(userId, null);
-    if (!sub) {
-      return res.status(404).json({
-        status: false,
-        message: "Subaccount not found"
-      });
-    }
-
-    const subId = sub.id;
-    const subData = sub.data;
-
-    // Ensure recipient exists
-    const recipient = await ensureRecipient(subId, subData);
     const recipient_code = recipient.recipient_code;
-    console.log(recipient_code,"recipientCode")
 
-    // Initiate transfer
     const transfer = await initiateTransfer({
       amountKobo,
       recipient_code,
-      reason,
-      reference: clientRef || undefined,
-      metadata: { userId, ...metadata }
+      reason: `Ruumies Payout - ${withdrawalId.slice(0, 8)}`,
+      reference: undefined, 
+      metadata: { userId, withdrawalId }
     });
-    const record = {
-      clientRef: clientRef || null,
+
+    await withdrawalRef.update({
+      status: "processing",
       transfer_code: transfer.transfer_code || null,
       transfer_id: transfer.id || null,
-      amount: amountKobo,
-      amount_display: amountKobo / 100,
-      currency: transfer.currency || "NGN",
-      recipient_code,
-      recipient_subaccountId: subId,
-      recipient_account_number: subData.account_number,
-      status: transfer.status || "pending",
-      reason,
-      metadata: { userId, ...metadata },
-      raw: transfer,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    console.log(record,"record", transfer)
-    const saveId = transfer.transfer_code || transfer.id;
-
-    if (saveId) {
-      await db.collection("transfers").doc(String(saveId)).set(record, { merge: true });
-
-      return res.json({
-        status: true,
-        data: record,
-        id: saveId
-      });
-    }
-
-    const newDoc = await db.collection("transfers").add(record);
+      reference: transfer.reference || null, 
+      adminAction: {
+        by: req.user.uid, 
+        at: admin.firestore.FieldValue.serverTimestamp(),
+        note: "Transfer initiated via Paystack API"
+      }
+    });
 
     return res.json({
       status: true,
-      data: record,
-      id: newDoc.id
+      message: "Transfer initiated successfully",
+      data: { status: "processing", transfer_code: transfer.transfer_code }
     });
 
   } catch (error) {
-    if (error.response && error.response.data) {
-    console.error("payout error", error.response.data);
-    return res.status(400).json({
-      status: false,
-      message: error.response.data.message || "Paystack error"
-    });
-  }
+    await withdrawalRef.update({ status: "pending" });
 
-  console.error("payout error", error);
-  return res.status(500).json({
-    status: false,
-    message: "Internal payout error"
-  });
+    if (error.message === "INVALID_AMOUNT") {
+       return res.status(400).json({ status: false, message: "Invalid amount in database." });
+    }
+
+    if (error.response && error.response.data) {
+      console.error("Payout error from Paystack:", error.response.data);
+      return res.status(400).json({
+        status: false,
+        message: error.response.data.message || "Paystack transfer failed"
+      });
+    }
+
+    console.error("Internal Payout Error:", error);
+    return res.status(500).json({ status: false, message: "Internal server error during payout" });
   }
 });
-
-
-
-
 export default router;

@@ -3,11 +3,12 @@ import dotenv from "dotenv";
 import cors from "cors";
 import paystackRouter from "./src/routes/paystack.js";
 import webhookHandler from "./src/routes/paystackWebhookHandler.js";
+import adminRouter from "./src/routes/admin.js";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 if (!process.env.PAYSTACK_SECRET) {
   console.error("PAYSTACK_SECRET missing in env");
@@ -47,6 +48,9 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // payments routes
 app.use("/api/payments", paystackRouter);
+
+
+app.use("/api/admin", adminRouter);
 
 
 
