@@ -1,10 +1,24 @@
 import express from "express";
 import crypto from "crypto";
-import { createSubaccountOnPaystack, createTransferRecipient, initializeTransaction, initiateTransfer, resolveAccount, verifyTransaction } from "../services/paystackService.js";
+import { 
+  createSubaccountOnPaystack, 
+  createTransferRecipient, 
+  initializeTransaction, 
+  initiateTransfer, 
+  resolveAccount, 
+  verifyTransaction,
+  initiateRefund 
+} from "../services/paystackService.js";
 import { admin, db } from "../../firebase.js";
-import { ensureRecipient, findSubaccount } from "./payments.js";
 import { verifyAdmin, verifySuperAdmin } from "../middleware/authMiddleware.js";
+
 const router = express.Router();
+
+const ESCROW_RATES = {
+  tenantRefundRate: 0.90,
+  ownerCompensationRate: 0.10,
+  platformPenaltyFee: 0.01
+};
 
 router.get("/banks", async (req, res) => {
   try {
@@ -13,7 +27,6 @@ router.get("/banks", async (req, res) => {
         Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`
       }
     });
-
     const data = await response.json();
     res.json(data.data);
   } catch (error) {
@@ -21,27 +34,51 @@ router.get("/banks", async (req, res) => {
   }
 });
 
-// POST /api/payments/initialize
 router.post("/initialize", async (req, res) => {
   try {
     const { email, amount, metadata } = req.body;
-    console.log("metas",metadata)
-    if (!email || !amount) return res.status(400).json({ status: false, message: "email and amount required" });
+    
+    if (!email || !amount) {
+      return res.status(400).json({ status: false, message: "email and amount required" });
+    }
+
+    if (metadata?.propertyId) {
+      const wpUrl = `${process.env.WP_BASE_URL}/wp-json/wp/v2/property/${metadata.propertyId}`;
+      const credentials = Buffer.from(`${process.env.WP_ADMIN_USER}:${process.env.WP_APP_PASSWORD}`).toString("base64");
+      
+      const wpResponse = await fetch(wpUrl, {
+        headers: {
+          "Authorization": `Basic ${credentials}`,
+        }
+      });
+
+      if (wpResponse.ok) {
+        const propertyData = await wpResponse.json();
+        const escrowStatus = propertyData.acf?.escrow_status;
+        
+        if (escrowStatus && escrowStatus !== "available") {
+          return res.status(409).json({ 
+            status: false, 
+            message: "This property is already booked or locked in escrow." 
+          });
+        }
+      }
+    }
 
     const data = await initializeTransaction({ email, amount, metadata });
+    
     return res.json({
       status: true,
       access_code: data.access_code,
       authorization_url: data.authorization_url,
       reference: data.reference
     });
+    
   } catch (err) {
-    console.error("initialize error", err?.message || err);
     return res.status(500).json({ status: false, message: err.message || "server error" });
   }
 });
 
-// POST /api/payments/verify
 router.post("/verify", async (req, res) => {
   try {
     const { reference } = req.body;
@@ -50,7 +87,6 @@ router.post("/verify", async (req, res) => {
     const data = await verifyTransaction(reference);
     return res.json({ status: true, data });
   } catch (err) {
-    console.error("verify error", err?.message || err);
     return res.status(500).json({ status: false, message: err.message || "server error" });
   }
 });
@@ -62,17 +98,14 @@ router.post("/resolve-account", async (req, res) => {
       return res.status(400).json({ status: false, message: "account_number and bank_code are required" });
     }
 
-    // call Paystack via service
     const { account_name, raw } = await resolveAccount({ account_number, bank_code });
-
     return res.json({ status: true, data: { account_name, raw } });
   } catch (err) {
-    console.error("resolve-account error", err?.message || err, err?.response || "");
-    // If Paystack returns helpful message, use it
     const message = err?.response?.message || err?.message || "Failed to resolve account";
     return res.status(502).json({ status: false, message });
   }
 });
+
 router.post("/subaccount", async (req, res) => {
   try {
     const {
@@ -89,7 +122,6 @@ router.post("/subaccount", async (req, res) => {
       return res.status(400).json({ status: false, message: "business_name, bank_code and account_number are required" });
     }
 
-    // Check if this bank account is already registered globally
     let globalMatch = null;
     const q = await db.collection("subaccounts")
       .where("account_number", "==", String(account_number))
@@ -105,11 +137,9 @@ router.post("/subaccount", async (req, res) => {
     let paystackSubaccountId;
 
     if (globalMatch && globalMatch.paystack_subaccount_id) {
-      // Reuse existing subaccount details
       paystackSubaccountId = globalMatch.paystack_subaccount_id;
       subaccountData = globalMatch.subaccount;
     } else {
-      // Create new subaccount on Paystack
       const paystackPayload = {
         business_name,
         bank_code,
@@ -122,7 +152,6 @@ router.post("/subaccount", async (req, res) => {
       paystackSubaccountId = subaccountData.subaccount_code;
     }
 
-    // Prepare data to save/update for this specific user
     const stored = {
       userId: userId || null,
       paystack_subaccount_id: paystackSubaccountId,
@@ -151,111 +180,149 @@ router.post("/subaccount", async (req, res) => {
     return res.json({ status: true, data: stored });
 
   } catch (err) {
-    console.error("create subaccount error", err?.message || err, err?.response || "");
     const message = err?.response?.message || err?.message || "Failed to create subaccount";
     return res.status(502).json({ status: false, message });
   }
 });
 
-// POST /api/payments/payout
-router.post("/payout", verifyAdmin, async (req, res) => {
-  const { withdrawalId } = req.body;
-
-  if (!withdrawalId) {
-    return res.status(400).json({ status: false, message: "withdrawalId is required" });
-  }
-
-  const withdrawalRef = db.collection("withdrawals").doc(withdrawalId);
-  let withdrawalData;
-
+router.post("/approve-payout", verifyAdmin, async (req, res) => {
   try {
-    withdrawalData = await db.runTransaction(async (transaction) => {
-      const withdrawalSnap = await transaction.get(withdrawalRef);
-
-      if (!withdrawalSnap.exists) {
-        throw new Error("NOT_FOUND");
-      }
-
-      const data = withdrawalSnap.data();
-
-      if (data.status !== "pending") {
-        throw new Error(`ALREADY_PROCESSED_${data.status}`);
-      }
-
-      transaction.update(withdrawalRef, { status: "processing_init" });
-      
-      return data;
-    });
-  } catch (error) {
-    if (error.message === "NOT_FOUND") {
-      return res.status(404).json({ status: false, message: "Withdrawal request not found" });
+    const { transactionDocId } = req.body;
+    if (!transactionDocId) {
+      return res.status(400).json({ status: false, message: "transactionDocId required" });
     }
-    if (error.message.startsWith("ALREADY_PROCESSED")) {
-      return res.status(400).json({ status: false, message: "This withdrawal is already being processed or completed." });
+    
+    const txRef = db.collection("paymentEntries").doc(transactionDocId);
+    const txSnap = await txRef.get();
+    
+    if (!txSnap.exists) {
+      return res.status(404).json({ status: false, message: "Transaction not found" });
     }
-    return res.status(500).json({ status: false, message: "Database transaction failed." });
-  }
-
-  try {
-    const { amount, bank: bankDetails, userId } = withdrawalData;
-    const amountKobo = Math.round(Number(amount) * 100);
-
-    if (isNaN(amountKobo) || amountKobo <= 0) {
-      throw new Error("INVALID_AMOUNT");
+    const txData = txSnap.data();
+    if (txData.escrowStatus !== "Move_In_Confirmed") {
+      return res.status(400).json({ status: false, message: "Transaction is not ready for payout" });
     }
+
+    const ownerId = txData.receiverID || txData.metadata?.uid;
+    if (!ownerId || typeof ownerId !== 'string') {
+      return res.status(400).json({ 
+        status: false, 
+        message: "Database Error: This transaction is missing the owner's ID (receiverID)." 
+      });
+    }
+    const subSnap = await db.collection("subaccounts").doc(ownerId).get();
+    
+    if (!subSnap.exists) {
+      return res.status(400).json({ status: false, message: "Owner bank details not found" });
+    }
+
+    const bankDetails = subSnap.data();
+    const amountKobo = Math.round(Number(txData.ownerPendingAmount) * 100);
 
     const recipient = await createTransferRecipient({
-      name: bankDetails.account_name || "Ruumies User",
+      name: bankDetails.account_name,
       account_number: bankDetails.account_number,
       bank_code: bankDetails.bank_code,
-      metadata: { userId, withdrawalId }
+      metadata: { ownerId, transactionDocId }
     });
-
-    const recipient_code = recipient.recipient_code;
 
     const transfer = await initiateTransfer({
       amountKobo,
-      recipient_code,
-      reason: `Ruumies Payout - ${withdrawalId.slice(0, 8)}`,
-      reference: undefined, 
-      metadata: { userId, withdrawalId }
+      recipient_code: recipient.recipient_code,
+      reason: `Ruumies Payout - ${transactionDocId.slice(0, 8)}`,
+      metadata: { ownerId, transactionDocId }
     });
 
-    await withdrawalRef.update({
-      status: "processing",
-      transfer_code: transfer.transfer_code || null,
-      transfer_id: transfer.id || null,
-      reference: transfer.reference || null, 
-      adminAction: {
-        by: req.user.uid, 
-        at: admin.firestore.FieldValue.serverTimestamp(),
-        note: "Transfer initiated via Paystack API"
-      }
-    });
+    const batch = db.batch();
+    batch.update(txRef, { escrowStatus: "Processing_Transfer" });
+    
+    const ownerTxRef = db.doc(`payments/${ownerId}/transactions/${transactionDocId}`);
+    batch.update(ownerTxRef, { escrowStatus: "Processing_Transfer" });
+    
+    await batch.commit();
 
-    return res.json({
-      status: true,
-      message: "Transfer initiated successfully",
-      data: { status: "processing", transfer_code: transfer.transfer_code }
-    });
+    return res.json({ status: true, message: "Transfer initiated successfully" });
 
-  } catch (error) {
-    await withdrawalRef.update({ status: "pending" });
+  } catch (err) {
+    return res.status(500).json({ status: false, message: err.response?.data?.message || err.message });
+  }
+});
 
-    if (error.message === "INVALID_AMOUNT") {
-       return res.status(400).json({ status: false, message: "Invalid amount in database." });
+router.post("/refund", verifyAdmin, async (req, res) => {
+  try {
+    const { transactionDocId, faultParty } = req.body;
+    
+    if (!transactionDocId || !faultParty) {
+      return res.status(400).json({ status: false, message: "transactionDocId and faultParty required" });
     }
 
-    if (error.response && error.response.data) {
-      console.error("Payout error from Paystack:", error.response.data);
-      return res.status(400).json({
-        status: false,
-        message: error.response.data.message || "Paystack transfer failed"
+    const txRef = db.collection("paymentEntries").doc(transactionDocId);
+    const txSnap = await txRef.get();
+    
+    if (!txSnap.exists) {
+      return res.status(404).json({ status: false, message: "Transaction not found" });
+    }
+
+    const txData = txSnap.data();
+    if (txData.escrowStatus === "Refunded" || txData.escrowStatus === "Processing_Refund") {
+      return res.status(400).json({ status: false, message: "This transaction is already refunded or processing" });
+    }
+
+    const rentAmount = Number(txData.metadata?.rentAmount || txData.rentAmount);
+    let refundAmountKobo = Math.round(rentAmount * 100);
+
+    if (faultParty === "ruumie") {
+      refundAmountKobo = Math.round(rentAmount * ESCROW_RATES.tenantRefundRate * 100);
+    }
+
+    await initiateRefund({
+      transactionRef: txData.reference, 
+      amountKobo: refundAmountKobo,
+      merchant_note: `Admin Refund for Property ID: ${txData.metadata?.propertyId}`
+    });
+
+    const batch = db.batch();
+    const ownerId = txData.receiverID;
+
+    batch.update(txRef, { 
+      escrowStatus: "Processing_Refund", 
+      refundInitiatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      faultAssignedTo: faultParty
+    });
+
+    const ownerTxRef = db.doc(`payments/${ownerId}/transactions/${transactionDocId}`);
+    batch.update(ownerTxRef, { escrowStatus: "Processing_Refund" });
+
+    await batch.commit();
+
+    const propertyId = txData.metadata?.propertyId;
+    if (propertyId) {
+      const wpUrl = `${process.env.WP_BASE_URL}/wp-json/rummies-wp/v1/update-property`; 
+      const credentials = Buffer.from(`${process.env.WP_ADMIN_USER}:${process.env.WP_APP_PASSWORD}`).toString("base64");
+      
+      const wpPayload = new URLSearchParams();
+      wpPayload.append('id', propertyId);
+      wpPayload.append('escrow_status', 'available');
+      wpPayload.append('escrow_tenant_id', '');
+      wpPayload.append('escrow_payment_date', '');
+      wpPayload.append('escrow_release_date', '');
+      wpPayload.append('occupancy_status', 0); 
+
+      await fetch(wpUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: wpPayload
       });
     }
 
-    console.error("Internal Payout Error:", error);
-    return res.status(500).json({ status: false, message: "Internal server error during payout" });
+    return res.json({ status: true, message: "Refund initiated. Processing will complete via webhook." });
+
+  } catch (err) {
+    return res.status(500).json({ status: false, message: err.response?.data?.message || err.message });
   }
 });
+
 export default router;
