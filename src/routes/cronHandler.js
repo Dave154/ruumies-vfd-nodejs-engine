@@ -54,11 +54,7 @@ export default async function checkEscrowExpiry(req, res) {
       try {
         const wpPayload = new URLSearchParams();
         wpPayload.append('id', propertyId);
-        wpPayload.append('escrow_status', 'available');
-        wpPayload.append('escrow_tenant_id', '');
-        wpPayload.append('escrow_payment_date', '');
-        wpPayload.append('escrow_release_date', '');
-        wpPayload.append('occupancy_status', 0);
+        wpPayload.append('escrow_status', 'Move_In_Confirmed');
 
         const response = await fetch(wpUrl, {
           method: "POST",
