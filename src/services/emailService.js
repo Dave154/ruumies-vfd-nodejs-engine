@@ -50,7 +50,7 @@ const generateEmailHtml = (title, content) => `
 </html>
 `;
 
-async function sendCoreEmail({ to, subject, html }) {
+export async function sendCoreEmail({ to, subject, html }) {
   try {
     const data = await resend.emails.send({
       from: FROM_EMAIL,
