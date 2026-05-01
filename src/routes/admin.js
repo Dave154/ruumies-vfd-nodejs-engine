@@ -1,6 +1,7 @@
 import express from "express";
 import { admin, db } from "../../firebase.js";
 import { verifySuperAdmin } from "../middleware/authMiddleware.js";
+import { sendRoleAssignedEmail } from "../services/emailService.js";
 import axios from "axios";
 
 const router = express.Router();
@@ -67,6 +68,11 @@ router.post("/assign-role", verifySuperAdmin, async (req, res) => {
       assignedBy: req.user.uid,
       assignedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
+
+    // Send notification email (don't block on this)
+    sendRoleAssignedEmail(email, role).catch(emailError => {
+      console.error("Failed to send role assignment email:", emailError);
+    });
 
     return res.json({ 
       status: true, 

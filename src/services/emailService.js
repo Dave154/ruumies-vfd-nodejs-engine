@@ -142,3 +142,27 @@ export async function sendRefundEmail(userEmail, amount, reason) {
     html: generateEmailHtml('Refund Processed', content)
   });
 }
+
+export async function sendRoleAssignedEmail(userEmail, role) {
+  const roleDisplayName = role === 'super_admin' ? 'Super Administrator' : 'Support';
+  const content = `
+    <p style="margin-bottom: 24px;">Congratulations! You have been granted administrative access to the Ruumies platform.</p>
+    <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 24px;">
+      <p style="margin: 0; color: #1e40af; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Role Assigned</p>
+      <p style="margin: 8px 0 0 0; color: #1e3a8a; font-size: 24px; font-weight: 700;">${roleDisplayName}</p>
+    </div>
+    <p style="margin-bottom: 16px;"><strong>What does this mean?</strong></p>
+    <ul style="margin-top: 0; margin-bottom: 24px; padding-left: 20px; color: #475569;">
+      <li style="margin-bottom: 8px;">You now have access to administrative features and tools.</li>
+      <li style="margin-bottom: 8px;">Please use your powers responsibly to help maintain the platform.</li>
+      <li>If you have any questions about your role, contact our support team.</li>
+    </ul>
+    <p style="margin: 0;">Welcome to the Ruumies admin team!</p>
+  `;
+
+  return sendCoreEmail({
+    to: userEmail,
+    subject: `Administrative Access Granted: ${roleDisplayName}`,
+    html: generateEmailHtml('Admin Access Granted', content)
+  });
+}
