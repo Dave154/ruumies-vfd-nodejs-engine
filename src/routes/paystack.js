@@ -7,18 +7,13 @@ import {
   initiateTransfer, 
   resolveAccount, 
   verifyTransaction,
-  initiateRefund 
+  initiateRefund,
+  ESCROW_RATES
 } from "../services/paystackService.js";
 import { admin, db } from "../../firebase.js";
 import { verifyAdmin, verifySuperAdmin } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
-
-const ESCROW_RATES = {
-  tenantRefundRate: 0.90,
-  ownerCompensationRate: 0.10,
-  platformPenaltyFee: 0.01
-};
 
 router.get("/banks", async (req, res) => {
   try {
@@ -210,38 +205,115 @@ router.post("/approve-payout", verifyAdmin, async (req, res) => {
         message: "Database Error: This transaction is missing the owner's ID (receiverID)." 
       });
     }
-    const subSnap = await db.collection("subaccounts").doc(ownerId).get();
+
+    // Fetch owner's outstanding debt
+    const userSnap = await db.collection("users").doc(ownerId).get();
+    const ownerData = userSnap.data() || {};
+    const totalOutstandingDebt = ownerData.totalOutstandingDebt || 0;
     
-    if (!subSnap.exists) {
-      return res.status(400).json({ status: false, message: "Owner bank details not found" });
-    }
-
-    const bankDetails = subSnap.data();
-    const amountKobo = Math.round(Number(txData.ownerPendingAmount) * 100);
-
-    const recipient = await createTransferRecipient({
-      name: bankDetails.account_name,
-      account_number: bankDetails.account_number,
-      bank_code: bankDetails.bank_code,
-      metadata: { ownerId, transactionDocId }
-    });
-
-    const transfer = await initiateTransfer({
-      amountKobo,
-      recipient_code: recipient.recipient_code,
-      reason: `Ruumies Payout - ${transactionDocId.slice(0, 8)}`,
-      metadata: { ownerId, transactionDocId }
-    });
+    const payoutAmountNGN = Number(txData.ownerPendingAmount);
+    const netPayoutAmountNGN = payoutAmountNGN - totalOutstandingDebt;
 
     const batch = db.batch();
-    batch.update(txRef, { escrowStatus: "Processing_Transfer" });
+    let transferInitiated = false;
+    let debtPaymentId = null;
+
+    if (netPayoutAmountNGN > 0) {
+      // Debt is less than payout - process transfer for net amount
+      const subSnap = await db.collection("subaccounts").doc(ownerId).get();
+      
+      if (!subSnap.exists) {
+        return res.status(400).json({ status: false, message: "Owner bank details not found" });
+      }
+
+      const bankDetails = subSnap.data();
+      const amountKobo = Math.round(netPayoutAmountNGN * 100);
+
+      const recipient = await createTransferRecipient({
+        name: bankDetails.account_name,
+        account_number: bankDetails.account_number,
+        bank_code: bankDetails.bank_code,
+        metadata: { ownerId, transactionDocId }
+      });
+
+      await initiateTransfer({
+        amountKobo,
+        recipient_code: recipient.recipient_code,
+        reason: `Ruumies Payout - ${transactionDocId.slice(0, 8)}`,
+        metadata: { ownerId, transactionDocId }
+      });
+
+      transferInitiated = true;
+
+      // Mark all owner's debts as paid
+      if (totalOutstandingDebt > 0) {
+        const debtSnap = await db.collection("ownerDebts")
+          .where("ownerId", "==", ownerId)
+          .where("status", "==", "pending")
+          .get();
+
+        debtSnap.docs.forEach(doc => {
+          batch.update(doc.ref, { status: "paid" });
+        });
+
+        // Create debt payment record
+        const debtPaymentRef = db.collection("debtPayments").doc();
+        debtPaymentId = debtPaymentRef.id;
+        batch.set(debtPaymentRef, {
+          ownerId,
+          transactionDocId,
+          debtAmountPaidKobo: Math.round(totalOutstandingDebt * 100),
+          debtAmountPaidNGN: totalOutstandingDebt,
+          payoutAmountNGN,
+          netTransferAmountNGN: netPayoutAmountNGN,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          paymentType: "debt_deduction_with_transfer"
+        });
+
+        // Reduce user's total outstanding debt to 0
+        batch.update(userSnap.ref, { totalOutstandingDebt: 0 });
+      }
+    } else {
+      // Debt is equal to or greater than payout - no transfer, reduce debt
+      const debtAmountReducedNGN = payoutAmountNGN;
+      const newRemainingDebtNGN = totalOutstandingDebt - debtAmountReducedNGN;
+
+      // Create debt payment record
+      const debtPaymentRef = db.collection("debtPayments").doc();
+      debtPaymentId = debtPaymentRef.id;
+      batch.set(debtPaymentRef, {
+        ownerId,
+        transactionDocId,
+        debtAmountPaidKobo: Math.round(debtAmountReducedNGN * 100),
+        debtAmountPaidNGN: debtAmountReducedNGN,
+        payoutAmountNGN,
+        netTransferAmountNGN: 0,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        paymentType: "debt_only_deduction"
+      });
+
+      // Update user's remaining outstanding debt
+      batch.update(userSnap.ref, { totalOutstandingDebt: newRemainingDebtNGN });
+    }
+
+    // Update transaction
+    batch.update(txRef, { 
+      escrowStatus: "Processing_Transfer",
+      debtCollected: totalOutstandingDebt,
+      netPayoutAmount: netPayoutAmountNGN,
+      debtPaymentId
+    });
     
     const ownerTxRef = db.doc(`payments/${ownerId}/transactions/${transactionDocId}`);
     batch.update(ownerTxRef, { escrowStatus: "Processing_Transfer" });
     
     await batch.commit();
 
-    return res.json({ status: true, message: "Transfer initiated successfully" });
+    const responseMessage = transferInitiated 
+      ? `Transfer initiated for ${netPayoutAmountNGN} NGN. Debt of ${totalOutstandingDebt} NGN collected.`
+      : `No transfer. Payout fully applied to debt reduction (${payoutAmountNGN} NGN collected). Remaining debt: ${totalOutstandingDebt - payoutAmountNGN} NGN`;
+
+    return res.json({ status: true, message: responseMessage });
 
   } catch (err) {
     return res.status(500).json({ status: false, message: err.response?.data?.message || err.message });
@@ -256,6 +328,15 @@ router.post("/refund", verifyAdmin, async (req, res) => {
       return res.status(400).json({ status: false, message: "transactionDocId and faultParty required" });
     }
 
+    // Validate fault party
+    const validFaultParties = ['ruumie', 'owner', 'mutual'];
+    if (!validFaultParties.includes(faultParty)) {
+      return res.status(400).json({ 
+        status: false, 
+        message: "Invalid faultParty. Must be one of: ruumie, owner, mutual" 
+      });
+    }
+
     const txRef = db.collection("paymentEntries").doc(transactionDocId);
     const txSnap = await txRef.get();
     
@@ -264,63 +345,146 @@ router.post("/refund", verifyAdmin, async (req, res) => {
     }
 
     const txData = txSnap.data();
+    
+    // Validate transaction has required data
+    if (!txData.reference || !txData.metadata?.rentAmount) {
+      return res.status(400).json({ 
+        status: false, 
+        message: "Transaction missing required data for refund" 
+      });
+    }
+
     if (txData.escrowStatus === "Refunded" || txData.escrowStatus === "Processing_Refund") {
       return res.status(400).json({ status: false, message: "This transaction is already refunded or processing" });
     }
 
-    const rentAmount = Number(txData.metadata?.rentAmount || txData.rentAmount);
-    let refundAmountKobo = Math.round(rentAmount * 100);
+    // Only allow refunds for transactions that are in escrow
+    const allowedStatuses = ["Held", "Move_In_Confirmed"];
+    if (!allowedStatuses.includes(txData.escrowStatus)) {
+      return res.status(400).json({ 
+        status: false, 
+        message: `Cannot refund transaction with status: ${txData.escrowStatus}` 
+      });
+    }
 
-    if (faultParty === "ruumie") {
-      refundAmountKobo = Math.round(rentAmount * ESCROW_RATES.tenantRefundRate * 100);
+    const rentAmount = Number(txData.metadata?.rentAmount || txData.rentAmount);
+    if (!rentAmount || rentAmount <= 0) {
+      return res.status(400).json({ status: false, message: "Invalid rent amount for refund" });
+    }
+
+    let refundAmountKobo = Math.round(rentAmount * 100);
+    let ownerDebtAmountKobo = 0;
+
+    if (faultParty === "owner") {
+      // Owner at fault: Ruumie gets 101%, Owner accumulates 1% debt
+      refundAmountKobo = Math.round(rentAmount * ESCROW_RATES.ownerFaultyRefundRate * 100);
+      ownerDebtAmountKobo = Math.round(rentAmount * ESCROW_RATES.ownerDebtRate * 100);
+    } else if (faultParty === "ruumie") {
+      // Ruumie at fault: Ruumie gets 5%, no service charge, no debt
+      refundAmountKobo = Math.round(rentAmount * ESCROW_RATES.ruumieRefundRate * 100);
+    } else if (faultParty === "mutual") {
+      // Mutual fault: Ruumie gets 100%, Owner accumulates 1% debt
+      refundAmountKobo = Math.round(rentAmount * ESCROW_RATES.mutualRefundRate * 100);
+      ownerDebtAmountKobo = Math.round(rentAmount * ESCROW_RATES.ownerDebtRate * 100);
+    }
+
+    // Validate refund amount is reasonable (not more than owner faulty refund rate)
+    const maxAllowedRefund = Math.round(rentAmount * ESCROW_RATES.ownerFaultyRefundRate * 100);
+    if (refundAmountKobo > maxAllowedRefund) {
+      return res.status(400).json({ 
+        status: false, 
+        message: "Calculated refund amount exceeds maximum allowed" 
+      });
     }
 
     await initiateRefund({
       transactionRef: txData.reference, 
       amountKobo: refundAmountKobo,
-      merchant_note: `Admin Refund for Property ID: ${txData.metadata?.propertyId}`
+      merchant_note: `Admin Refund for Property ID: ${txData.metadata?.propertyId || 'N/A'}`
     });
 
     const batch = db.batch();
     const ownerId = txData.receiverID;
 
+    if (!ownerId) {
+      return res.status(400).json({ status: false, message: "Transaction missing owner ID" });
+    }
+
     batch.update(txRef, { 
       escrowStatus: "Processing_Refund", 
       refundInitiatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      faultAssignedTo: faultParty
+      faultAssignedTo: faultParty,
+      refundAmount: refundAmountKobo / 100,
+      ownerDebtAmount: ownerDebtAmountKobo / 100
     });
 
     const ownerTxRef = db.doc(`payments/${ownerId}/transactions/${transactionDocId}`);
     batch.update(ownerTxRef, { escrowStatus: "Processing_Refund" });
 
+    // Add debt record if owner is at fault or mutual fault
+    if (ownerDebtAmountKobo > 0) {
+      const debtRef = db.collection("ownerDebts").doc();
+      batch.set(debtRef, {
+        ownerId,
+        transactionDocId,
+        debtAmountKobo: ownerDebtAmountKobo,
+        debtAmountNGN: ownerDebtAmountKobo / 100,
+        reason: `${faultParty === "mutual" ? "Mutual fault" : "Owner at fault"} - Refund penalty`,
+        faultParty,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        status: "pending"
+      });
+
+      // Update user's total outstanding debt
+      const userRef = db.collection("users").doc(ownerId);
+      batch.update(userRef, {
+        totalOutstandingDebt: admin.firestore.FieldValue.increment(ownerDebtAmountKobo / 100)
+      });
+    }
+
     await batch.commit();
 
     const propertyId = txData.metadata?.propertyId;
     if (propertyId) {
-      const wpUrl = `${process.env.WP_BASE_URL}/wp-json/rummies-wp/v1/update-property`; 
-      const credentials = Buffer.from(`${process.env.WP_ADMIN_USER}:${process.env.WP_APP_PASSWORD}`).toString("base64");
-      
-      const wpPayload = new URLSearchParams();
-      wpPayload.append('id', propertyId);
-      wpPayload.append('escrow_status', 'available');
-      wpPayload.append('escrow_tenant_id', '');
-      wpPayload.append('escrow_payment_date', '');
-      wpPayload.append('escrow_release_date', '');
-      wpPayload.append('occupancy_status', 0); 
+      try {
+        const wpUrl = `${process.env.WP_BASE_URL}/wp-json/rummies-wp/v1/update-property`; 
+        const credentials = Buffer.from(`${process.env.WP_ADMIN_USER}:${process.env.WP_APP_PASSWORD}`).toString("base64");
+        
+        const wpPayload = new URLSearchParams();
+        wpPayload.append('id', propertyId);
+        wpPayload.append('escrow_status', 'available');
+        wpPayload.append('escrow_tenant_id', '');
+        wpPayload.append('escrow_payment_date', '');
+        wpPayload.append('escrow_release_date', '');
+        wpPayload.append('occupancy_status', 0); 
 
-      await fetch(wpUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": `Basic ${credentials}`,
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: wpPayload
-      });
+        const wpResponse = await fetch(wpUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": `Basic ${credentials}`,
+            "Content-Type": "application/x-www-form-urlencoded"
+          },
+          body: wpPayload
+        });
+
+        if (!wpResponse.ok) {
+          console.error(`Failed to update WordPress property ${propertyId} escrow status`);
+        }
+      } catch (wpError) {
+        console.error("Error updating WordPress property status:", wpError);
+        // Don't fail the refund if WP update fails
+      }
     }
 
-    return res.json({ status: true, message: "Refund initiated. Processing will complete via webhook." });
+    return res.json({ 
+      status: true, 
+      message: "Refund initiated. Processing will complete via webhook.",
+      refundAmount: refundAmountKobo / 100,
+      faultParty
+    });
 
   } catch (err) {
+    console.error("Refund endpoint error:", err);
     return res.status(500).json({ status: false, message: err.response?.data?.message || err.message });
   }
 });

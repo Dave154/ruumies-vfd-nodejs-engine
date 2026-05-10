@@ -6,6 +6,7 @@ import checkEscrowExpiry from "../src/routes/cronHandler.js";
 import paystackRouter from "../src/routes/paystack.js";
 import emailRouter from "../src/routes/emails.js";
 import adminRouter from "../src/routes/admin.js";
+import otpRouter from "../src/routes/otp.js";
 
 import webhookHandler from "../src/routes/paystackWebhookHandler.js";
 
@@ -51,8 +52,7 @@ app.get("/health", (_req, res) => {
 app.use("/api/payments", paystackRouter);
 app.use("/api/emails", emailRouter);
 app.use("/api/admin", adminRouter);
-
-
+app.use("/api/auth", otpRouter);
 
 app.get('/api/cron/release-escrow', checkEscrowExpiry);
 

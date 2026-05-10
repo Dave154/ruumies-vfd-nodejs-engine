@@ -166,3 +166,97 @@ export async function sendRoleAssignedEmail(userEmail, role) {
     html: generateEmailHtml('Admin Access Granted', content)
   });
 }
+
+export async function sendOtpEmail(userEmail, code) {
+  const content = `
+    <p style="margin-bottom: 24px;">Use the code below to verify your email address. This code expires in 10 minutes.</p>
+    <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 24px;">
+      <p style="margin: 0; color: #0f172a; font-size: 32px; font-weight: 700; letter-spacing: 0.15em;">${code}</p>
+    </div>
+    <p style="margin: 0;">If you did not request this code, please ignore this email.</p>
+  `;
+
+  return sendCoreEmail({
+    to: userEmail,
+    subject: 'Your Ruumies verification code',
+    html: generateEmailHtml('Verify your email', content)
+  });
+}
+
+
+export async function sendWelcomeEmail(email, firstName) {
+  try {
+    const data = await resend.emails.send({
+      from: 'Ruumies <admin@ruumies.com>', 
+      to: email,
+      subject: 'Welcome to Ruumies! Next Step: Your Profile',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <h2>Welcome aboard, ${firstName}!</h2>
+          <p>Your email is verified and your account is secure. You are one step away from finding your perfect roommate or property.</p>
+          <p>To get the best matches, we need to know a little bit more about what you are looking for.</p>
+          
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="https://app.ruumies.com/dashboard/complete-account" 
+               style="background-color: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+              Complete Your Profile
+            </a>
+          </div>
+          
+          <p style="color: #666; font-size: 14px;">If you have any questions about how escrows or roommate matching works, our support team is always here to help.</p>
+        </div>
+      `
+    });
+    return data;
+  } catch (error) {
+    console.error("Welcome Email Error:", error);
+    throw error;
+  }
+}
+
+export async function sendPropertyApprovalEmail({ propertyId, propertyTitle, ownerEmail, ownerName }) {
+  const content = `
+    <p style="margin-bottom: 24px;">Good news! Your property has been reviewed and <strong>approved</strong> by our administration team.</p>
+    <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+      <p style="margin: 0 0 12px 0; color: #166534; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Property Approved</p>
+      <p style="margin: 0; color: #15803d; font-size: 18px; font-weight: 600; word-break: break-word;">${propertyTitle}</p>
+    </div>
+    <p style="margin-bottom: 16px;"><strong>What happens next?</strong></p>
+    <ul style="margin-top: 0; margin-bottom: 24px; padding-left: 20px; color: #475569;">
+      <li style="margin-bottom: 8px;">Your property is now live on the Ruumies platform.</li>
+      <li style="margin-bottom: 8px;">You can start receiving inquiries from interested tenants.</li>
+      <li>Visit your dashboard to manage applications and schedule viewings.</li>
+    </ul>
+    <p style="margin: 0;">Thank you for listing your property with Ruumies!</p>
+  `;
+
+  return sendCoreEmail({
+    to: ownerEmail,
+    subject: `Property Approved: ${propertyTitle}`,
+    html: generateEmailHtml(`Welcome, ${ownerName}! Your Property is Approved`, content)
+  });
+}
+
+export async function sendPropertyRejectionEmail({ propertyId, propertyTitle, ownerEmail, ownerName }) {
+  const content = `
+    <p style="margin-bottom: 24px;">Thank you for listing your property on Ruumies. After careful review, our administration team has <strong>declined</strong> the listing at this time.</p>
+    <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+      <p style="margin: 0 0 12px 0; color: #991b1b; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Property Not Approved</p>
+      <p style="margin: 0; color: #b91c1c; font-size: 18px; font-weight: 600; word-break: break-word;">${propertyTitle}</p>
+    </div>
+    <p style="margin-bottom: 16px; color: #475569;">This decision may be due to various reasons including listing details, documentation, or compliance with our platform guidelines.</p>
+    <p style="margin-bottom: 24px; color: #475569;"><strong>What can you do?</strong></p>
+    <ul style="margin-top: 0; margin-bottom: 24px; padding-left: 20px; color: #475569;">
+      <li style="margin-bottom: 8px;">Review the listing requirements on our platform.</li>
+      <li style="margin-bottom: 8px;">Update your property information and re-submit for review.</li>
+      <li>Contact our support team for specific feedback on this rejection.</li>
+    </ul>
+    <p style="margin: 0;">We value your interest and hope to see your property listed soon!</p>
+  `;
+
+  return sendCoreEmail({
+    to: ownerEmail,
+    subject: `Property Under Review: ${propertyTitle}`,
+    html: generateEmailHtml(`Update on Your Property Listing`, content)
+  });
+}

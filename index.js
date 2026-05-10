@@ -4,6 +4,8 @@ import cors from "cors";
 import paystackRouter from "./src/routes/paystack.js";
 import webhookHandler from "./src/routes/paystackWebhookHandler.js";
 import adminRouter from "./src/routes/admin.js";
+import otpRouter from "./src/routes/otp.js";
+import emailRouter from "./src/routes/emails.js";
 
 dotenv.config();
 
@@ -48,10 +50,8 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // payments routes
 app.use("/api/payments", paystackRouter);
-
-
 app.use("/api/admin", adminRouter);
-
-
+app.use("/api/auth", otpRouter);
+app.use("/api/emails", emailRouter);
 
 app.listen(PORT, () => console.log(`listening on ${PORT}`));

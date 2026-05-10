@@ -2,6 +2,18 @@ import axios from "axios";
 import dotenv from "dotenv";
 
 dotenv.config();
+export const ESCROW_RATES = {
+  ruumieRefundRate: 0.05,        // Ruumie at fault: 5% refund
+  mutualRefundRate: 1.0,         // Mutual fault: 100% refund to tenant
+  ownerDebtRate: 0.01,           // Owner at fault or mutual: 1% debt
+  ownerFaultyRefundRate: 1.01    // Owner at fault: 101% refund to tenant
+};
+
+export const REFUND_PROCESSING_RATES = {
+  ownerCompensationRate: 0.10,
+  platformPenaltyFee: 0.01
+};
+
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET;
 const API_BASE = "https://api.paystack.co";
 
