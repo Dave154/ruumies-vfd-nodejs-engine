@@ -343,9 +343,9 @@ router.post("/refund", verifyAdmin, async (req, res) => {
     if (!txSnap.exists) {
       return res.status(404).json({ status: false, message: "Transaction not found" });
     }
-
-    const txData = txSnap.data();
     
+    const txData = txSnap.data();
+    console.log(txData)
     // Validate transaction has required data
     if (!txData.reference || !txData.metadata?.rentAmount) {
       return res.status(400).json({ 
