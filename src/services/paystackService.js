@@ -181,7 +181,7 @@ export async function initiateRefund({ transactionRef, amountKobo, customer_note
     transaction: transactionRef,
     amount: Number(amountKobo)
   };
-  
+  console.log(amountKobo)
   if (customer_note) payload.customer_note = customer_note;
   if (merchant_note) payload.merchant_note = merchant_note;
 
