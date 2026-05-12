@@ -359,7 +359,7 @@ router.post("/refund", verifyAdmin, async (req, res) => {
     }
 
     // Only allow refunds for transactions that are in escrow
-    const allowedStatuses = ["Held", "Move_In_Confirmed"];
+    const allowedStatuses = ["Held", "Move_In_Confirmed", "Disputed"];
     if (!allowedStatuses.includes(txData.escrowStatus)) {
       return res.status(400).json({ 
         status: false, 

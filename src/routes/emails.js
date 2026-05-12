@@ -2,7 +2,8 @@ import express from 'express';
 import { 
   sendCoreEmail, 
   sendPropertyApprovalEmail, 
-  sendPropertyRejectionEmail 
+  sendPropertyRejectionEmail,
+  sendBookingReportEmail
 } from '../services/emailService.js';
 import { verifyAuth } from '../middleware/authMiddleware.js'; 
 
@@ -80,6 +81,38 @@ router.post('/send-property-rejection-email', verifyAuth, async (req, res) => {
     }
   } catch (error) {
     console.error('Error sending property rejection email:', error);
+    return res.status(500).json({ status: false, message: "Internal server error" });
+  }
+});
+
+router.post('/send-booking-report-email', verifyAuth, async (req, res) => {
+  const { propertyId, propertyTitle, propertyAddress, reason, bookingId, timestamp } = req.body;
+
+  // Validate required fields
+  if (!propertyId || !propertyTitle || !reason || !bookingId || !timestamp) {
+    return res.status(400).json({ 
+      status: false, 
+      message: "Missing required fields: propertyId, propertyTitle, reason, bookingId, timestamp" 
+    });
+  }
+
+  try {
+    const result = await sendBookingReportEmail({
+      propertyId,
+      propertyTitle,
+      propertyAddress,
+      reason,
+      bookingId,
+      timestamp
+    });
+
+    if (result.success) {
+      return res.json({ status: true, message: "Booking report email sent successfully!" });
+    } else {
+      return res.status(500).json({ status: false, message: "Failed to send booking report email" });
+    }
+  } catch (error) {
+    console.error('Error sending booking report email:', error);
     return res.status(500).json({ status: false, message: "Internal server error" });
   }
 });

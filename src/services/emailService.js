@@ -10,8 +10,8 @@ if (!apiKey) {
   console.warn("WARNING: RESEND_API_KEY is missing from the .env file.");
 }
 
-const resend = new Resend(apiKey || 're_dummy_key_to_prevent_crash');
-const FROM_EMAIL = 'Ruumies <admin@ruumies.com>'; 
+const resend = new Resend(apiKey);
+const FROM_EMAIL = 'Ruumies <admin@ruumies.com>';
 
 const generateEmailHtml = (title, content) => `
 <!DOCTYPE html>
@@ -258,5 +258,56 @@ export async function sendPropertyRejectionEmail({ propertyId, propertyTitle, ow
     to: ownerEmail,
     subject: `Property Under Review: ${propertyTitle}`,
     html: generateEmailHtml(`Update on Your Property Listing`, content)
+  });
+}
+
+export async function sendBookingReportEmail({ propertyId, propertyTitle, propertyAddress, reason, bookingId, timestamp }) {
+  const formattedDate = new Date(timestamp).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'UTC'
+  });
+
+  const content = `
+    <p style="margin-bottom: 24px;">A new booking report has been submitted and requires your attention.</p>
+    <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+      <table style="width: 100%; border-collapse: collapse; color: #0f172a;">
+        <tr style="border-bottom: 1px solid #dbeafe;">
+          <td style="padding: 12px 0; font-weight: 600; color: #1e40af; width: 40%;">Property Title</td>
+          <td style="padding: 12px 0;">${propertyTitle}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #dbeafe;">
+          <td style="padding: 12px 0; font-weight: 600; color: #1e40af;">Address</td>
+          <td style="padding: 12px 0;">${propertyAddress || 'N/A'}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #dbeafe;">
+          <td style="padding: 12px 0; font-weight: 600; color: #1e40af;">Property ID</td>
+          <td style="padding: 12px 0;">${propertyId}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #dbeafe;">
+          <td style="padding: 12px 0; font-weight: 600; color: #1e40af;">Booking ID</td>
+          <td style="padding: 12px 0;">${bookingId}</td>
+        </tr>
+        <tr>
+          <td style="padding: 12px 0; font-weight: 600; color: #1e40af;">Submitted</td>
+          <td style="padding: 12px 0;">${formattedDate}</td>
+        </tr>
+      </table>
+    </div>
+    <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+      <p style="margin: 0 0 8px 0; color: #475569; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Report Reason</p>
+      <p style="margin: 0; color: #0f172a; line-height: 1.6;">${reason}</p>
+    </div>
+    <p style="margin: 24px 0 0 0; color: #64748b; font-size: 14px;">Please log in to your admin dashboard to review and take action on this booking report.</p>
+  `;
+
+  return sendCoreEmail({
+    to: 'admin@ruumies.com',
+    subject: `New Booking Report: ${propertyTitle}`,
+    html: generateEmailHtml('New Booking Report', content)
   });
 }
