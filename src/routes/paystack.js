@@ -345,7 +345,7 @@ router.post("/refund", verifyAdmin, async (req, res) => {
     }
     
     const txData = txSnap.data();
-    console.log(txData)
+
     // Validate transaction has required data
     if (!txData.reference || !txData.metadata?.rentAmount) {
       return res.status(400).json({ 

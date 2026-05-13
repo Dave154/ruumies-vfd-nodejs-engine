@@ -59,7 +59,6 @@ export async function ensureRecipient(subId, subData) {
   });
 
   const recipient_code = created.recipient_code;
-  console.log(recipient_code)
   const subRef = db.collection("subaccounts").doc(String(subId));
 
   await db.runTransaction(async tx => {
