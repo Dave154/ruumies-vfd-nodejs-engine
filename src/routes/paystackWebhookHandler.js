@@ -345,6 +345,15 @@ async function handleRefundProcessed(eventData) {
 
     await batch.commit();
 
+    // Delete the active property request if propertyId is provided
+    if (txData.metadata?.propertyId) {
+      try {
+        await db.collection("active_property_requests").doc(txData.metadata.propertyId).delete();
+      } catch (deleteErr) {
+        console.error("Error deleting active property request:", deleteErr);
+      }
+    }
+
     // Safe email extraction with fallbacks
     const tenantEmail = txData.customer?.email || txData.metadata?.email;
     const amountRefunded = processedRefundAmount;
