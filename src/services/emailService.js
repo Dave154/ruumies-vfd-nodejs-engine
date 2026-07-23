@@ -11,7 +11,16 @@ if (!apiKey) {
 }
 
 const resend = new Resend(apiKey);
-const FROM_EMAIL = 'Ruumies <admin@ruumies.com>';
+const FROM_EMAIL = process.env.EMAIL_FROM || 'Ruumies <support@ruumies.com>';
+const REPLY_TO_EMAIL = process.env.REPLY_TO_EMAIL || 'support@ruumies.com';
+
+const generateEmailText = (html) => html
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&amp;/g, '&')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 const generateEmailHtml = (title, content) => `
 <!DOCTYPE html>
@@ -54,9 +63,11 @@ export async function sendCoreEmail({ to, subject, html }) {
   try {
     const data = await resend.emails.send({
       from: FROM_EMAIL,
+      reply_to: REPLY_TO_EMAIL,
       to,
       subject,
       html,
+      text: generateEmailText(html),
     });
     return { success: true, data };
   } catch (error) {
@@ -185,33 +196,24 @@ export async function sendOtpEmail(userEmail, code) {
 
 
 export async function sendWelcomeEmail(email, firstName) {
-  try {
-    const data = await resend.emails.send({
-      from: 'Ruumies <admin@ruumies.com>', 
-      to: email,
-      subject: 'Welcome to Ruumies! Next Step: Your Profile',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-          <h2>Welcome aboard, ${firstName}!</h2>
-          <p>Your email is verified and your account is secure. You are one step away from finding your perfect roommate or property.</p>
-          <p>To get the best matches, we need to know a little bit more about what you are looking for.</p>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="https://app.ruumies.com/dashboard/complete-account" 
-               style="background-color: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-              Complete Your Profile
-            </a>
-          </div>
-          
-          <p style="color: #666; font-size: 14px;">If you have any questions about how escrows or roommate matching works, our support team is always here to help.</p>
-        </div>
-      `
-    });
-    return data;
-  } catch (error) {
-    console.error("Welcome Email Error:", error);
-    throw error;
-  }
+  const content = `
+    <p style="margin-bottom: 24px;">Welcome aboard, ${firstName}!</p>
+    <p style="margin-bottom: 24px;">Your email is verified and your account is secure. You are one step away from completing your profile and getting the best matches on Ruumies.</p>
+    <p style="margin-bottom: 24px;">To help us tailor the right recommendations, please complete your profile details.</p>
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="https://app.ruumies.com/dashboard/complete-account"
+         style="background-color: #2563eb; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 700; display: inline-block;">
+        Complete Your Profile
+      </a>
+    </div>
+    <p style="margin: 0; color: #475569; font-size: 14px;">If you have questions, our support team is here to help.</p>
+  `;
+
+  return sendCoreEmail({
+    to: email,
+    subject: 'Welcome to Ruumies',
+    html: generateEmailHtml('Complete your profile', content)
+  });
 }
 
 export async function sendPropertyApprovalEmail({ propertyId, propertyTitle, ownerEmail, ownerName }) {
